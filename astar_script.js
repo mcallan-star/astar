@@ -1,4 +1,66 @@
-// script.js - A* Pathfinding Visualizer
+// --- Yuka NavMesh and PathPlanner Setup ---
+// Convert polygons to Yuka navmesh format
+const navMesh = new YUKA.NavMesh();
+// For a real navmesh, you would load or generate polygons and their adjacency
+// Here, we use a simple example with two adjacent squares
+navMesh.fromPolygons(polygons.map(poly => poly.map(v => new YUKA.Vector3(v.x, v.y, 0))));
+
+const pathPlanner = new YUKA.PathPlanner(navMesh);
+
+// Find a path between two points using Yuka
+function findNavMeshPath(start, end) {
+    // start and end should be YUKA.Vector3
+    const path = pathPlanner.findPath(start, end);
+    // path is an array of YUKA.Vector3
+    return path;
+}
+
+// Example usage:
+// const start = new YUKA.Vector3(150, 150, 0);
+// const end = new YUKA.Vector3(450, 250, 0);
+// const navPath = findNavMeshPath(start, end);
+// Use navPath for visualization and funnel smoothing
+// --- NavMesh Polygon Visualization Starter ---
+// Example polygon data (replace with your own navmesh polygons)
+const polygons = [
+    [ {x: 100, y: 100}, {x: 300, y: 100}, {x: 300, y: 300}, {x: 100, y: 300} ], // Square
+    [ {x: 300, y: 100}, {x: 500, y: 100}, {x: 500, y: 300}, {x: 300, y: 300} ], // Adjacent square
+];
+
+// Draw polygons on canvas
+function drawPolygons(ctx, polygons) {
+    ctx.save();
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 2;
+    polygons.forEach(poly => {
+        ctx.beginPath();
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let i = 1; i < poly.length; i++) {
+            ctx.lineTo(poly[i].x, poly[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(200,200,255,0.1)';
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
+// Example usage in your animation loop:
+// Replace grid drawing with polygon drawing
+// function animate() {
+//     ctx.clearRect(0, 0, canvas.width, canvas.height);
+//     drawPolygons(ctx, polygons);
+//     // ...draw path, particles, etc.
+//     requestAnimationFrame(animate);
+// }
+
+// --- Yuka NavMesh Setup Starter ---
+// You can use Yuka.NavMesh and Yuka.PathPlanner for pathfinding
+// See Yuka documentation for details: https://mugen87.github.io/yuka/docs/navmesh.html
+// script.js - Navmesh Pathfinding Visualizer with Yuka
+// Refactored to use Yuka for navmesh and funnel algorithm
+import * as YUKA from 'yuka';
 
 class Node {
     constructor(x, y) {
@@ -140,43 +202,20 @@ class AStarVisualizer {
         };
     }
 
-    handleMouseDown(e) {  //manages user placing the start node, end node, obstacles
+    handleMouseDown(e) {
         if (this.isRunning) return;
-
-        const pos = this.getMousePos(e);
-        // exit if position out of bounds
-        if (pos.x < 0 || pos.x >= this.cols || pos.y < 0 || pos.y >= this.rows) return;
-
-        const node = this.grid[pos.x][pos.y];
-
-        if (this.isPlacingStart) {  //start node not set
-            //reset any existing start/end nodes
+        const rect = this.canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        // Select start/end points inside polygons
+        if (this.isPlacingStart) {
             this.clearStartEnd();
-            //make that node the start
-            node.isStart = true;
-            //update reference
-            this.start = node;
-            //next user action will place the end node
+            this.start = new YUKA.Vector3(x, y, 0);
             this.isPlacingStart = false;
-            //center green particle burst in middle of cell
-            this.addParticles(pos.x * this.gridSize + this.gridSize / 2, pos.y * this.gridSize + this.gridSize / 2, '#00ff00');
-        } else if (!this.start || (this.start && !this.end)) {  //start node set, end node not set
-            //check that it isnt on start 
-            if (!node.isStart) {
-                //make that node the end
-                node.isEnd = true;
-                //update reference
-                this.end = node;
-                //trigger red particle burst
-                this.addParticles(pos.x * this.gridSize + this.gridSize / 2, pos.y * this.gridSize + this.gridSize / 2, '#ff0000');
-            }
-        } else {                    //mousedown event triggers an obstacle placement
-            if (!node.isStart && !node.isEnd) {  //start and end nodes set
-                //allow for true/false status for obstacles
-                node.isObstacle = !node.isObstacle;
-                //start drawing obstacles on drag
-                this.isDrawingObstacles = true;
-            }
+            this.addParticles(x, y, '#00ff00');
+        } else if (!this.start || (this.start && !this.end)) {
+            this.end = new YUKA.Vector3(x, y, 0);
+            this.addParticles(x, y, '#ff0000');
         }
     }
 
@@ -327,154 +366,46 @@ class AStarVisualizer {
         });
     }
 
-    async startPathfinding() {  //main a* algorithm -- open set means nodes to be evaluated, closed set means nodes already evaluated
+    async startPathfinding() {
         if (!this.start || !this.end) {
             alert('Please place both start and end points');
             return;
         }
-
         this.clearPath();
         this.isRunning = true;
         document.getElementById('startBtn').disabled = true;
-
-        this.openSet = [this.start];
-        this.start.g = 0;
-        this.start.h = this.heuristic(this.start, this.end);
-        this.start.f = this.start.h;
-
-        while (this.openSet.length > 0) {
-            // Find node with lowest f score
-            let current = this.openSet[0];
-            let currentIndex = 0;
-
-            for (let i = 1; i < this.openSet.length; i++) {
-                if (this.openSet[i].f < current.f) {
-                    current = this.openSet[i];
-                    currentIndex = i;
-                }
-            }
-
-            // Move current from open to closed set
-            this.openSet.splice(currentIndex, 1);  //remove 1 item at currentIndex
-            this.closedSet.push(current);
-            current.isExplored = true;
-
-            // Add exploration particles
-            this.addParticles(
-                current.x * this.gridSize + this.gridSize / 2,
-                current.y * this.gridSize + this.gridSize / 2,
-                '#00ffff',
-                3
-            );
-
-            // Check if we reached the goal
-            if (current === this.end) {  //truthy if ref's to nodes in memory are the same
-                //return a path array from start to end
-                this.reconstructPath(current);  
-                this.isRunning = false;
-                //reenable start button
-                document.getElementById('startBtn').disabled = false;
-                return;
-            }
-
-            // Check all neighbors
-            const neighbors = this.getNeighbors(current);
-
-            //skip over neighbors already evaluated
-            for (const neighbor of neighbors) {
-                if (this.closedSet.includes(neighbor)) continue;
-
-                // cost in a grid is always 1 between nodes
-                const tentativeG = current.g + 1;
-
-                //create the frontier nodes based on neighbors
-                if (!this.openSet.includes(neighbor)) {
-                    this.openSet.push(neighbor);
-                    neighbor.isFrontier = true;
-                    // Add frontier particles
-                    this.addParticles(
-                        neighbor.x * this.gridSize + this.gridSize / 2,
-                        neighbor.y * this.gridSize + this.gridSize / 2,
-                        '#ff00ff',
-                        2
-                    );
-                } else if (tentativeG >= neighbor.g) {
-                    continue;
-                }
-
-                neighbor.parent = current;
-                neighbor.g = tentativeG;
-                neighbor.h = this.heuristic(neighbor, this.end);
-                neighbor.f = neighbor.g + neighbor.h;
-            }
-
-            // Animation delay
-            if (this.animationEnabled) {
-                await new Promise(resolve => setTimeout(resolve, this.animationSpeed));
-            }
+        // Find navmesh path and apply funnel smoothing
+        const navPath = findNavMeshPath(this.start, this.end);
+        if (!navPath || navPath.length === 0) {
+            alert('No path found!');
+            this.isRunning = false;
+            document.getElementById('startBtn').disabled = false;
+            return;
         }
-
-        // No path found
-        alert('No path found!');
-        //stop running
+        // Visualize the smoothed path
+        for (let i = 0; i < navPath.length; i++) {
+            const p = navPath[i];
+            setTimeout(() => {
+                this.addParticles(p.x, p.y, '#ffff00', 5);
+                this.ctx.save();
+                this.ctx.fillStyle = '#ffff00';
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                this.ctx.fill();
+                this.ctx.restore();
+            }, i * 50);
+        }
         this.isRunning = false;
-        //reenable start button
         document.getElementById('startBtn').disabled = false;
     }
 
     draw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        // Draw grid
-        this.ctx.strokeStyle = '#222';
-        this.ctx.lineWidth = 1;
-
-        for (let i = 0; i <= this.cols; i++) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(i * this.gridSize, 0);
-            this.ctx.lineTo(i * this.gridSize, this.canvas.height);
-            this.ctx.stroke();
-        }
-
-        for (let j = 0; j <= this.rows; j++) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, j * this.gridSize);
-            this.ctx.lineTo(this.canvas.width, j * this.gridSize);
-            this.ctx.stroke();
-        }
-
-        // Draw nodes
-        for (let i = 0; i < this.cols; i++) {
-            for (let j = 0; j < this.rows; j++) {
-                const node = this.grid[i][j];
-                const x = i * this.gridSize;
-                const y = j * this.gridSize;
-
-                if (node.isObstacle) {
-                    this.ctx.fillStyle = '#333';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                } else if (node.isStart) {
-                    this.ctx.fillStyle = '#00ff00';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                } else if (node.isEnd) {
-                    this.ctx.fillStyle = '#ff0000';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                } else if (node.isPath) {
-                    this.ctx.fillStyle = '#ffff00';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                } else if (node.isExplored) {
-                    this.ctx.fillStyle = 'rgba(0, 255, 255, 0.3)';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                } else if (node.isFrontier) {
-                    this.ctx.fillStyle = 'rgba(255, 0, 255, 0.3)';
-                    this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-                }
-            }
-        }
-
+        // Draw polygons (navmesh)
+        drawPolygons(this.ctx, polygons);
         // Draw particles
         this.particles = this.particles.filter(particle => {
-            particle.update(); 
+            particle.update();
             particle.draw(this.ctx);
             return particle.life > 0;
         });
