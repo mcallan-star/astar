@@ -4,21 +4,15 @@ class Node {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-
-        this.g = 0; // tracks the cost from the start node to this node
-        this.h = 0; // is the heuristic estimate of the cost from this node to the end node
-        this.f = 0; // total cost f = g + h
-
-        // As the algorithm explores the grid, 
-        // it keeps track of each node’s parent so that, 
-        // once the end node is reached, it can reconstruct 
-        // the shortest path by following the chain of parent links 
-        // backward from the end node to the start node.
-
-        //no previous node
+        this.g = 0; // cost from start
+        this.h = 0; // heuristic cost to end
+        this.f = 0; // total cost
+        /*As the algorithm progresses, 
+        * each node will keep track of its 
+        * parent node to make a path once
+        *  the end node is reached.
+        **/
         this.parent = null;
-
-        //properties
         this.isObstacle = false;
         this.isStart = false;
         this.isEnd = false;
@@ -38,12 +32,7 @@ class Particle {  //colored bursts
         this.decay = 0.02;
         this.size = Math.random() * 3 + 2; //[2,5)
         this.vx = (Math.random() - 0.5) * 2;  // [-1,1) good for any direction
-        this.vy = (Math.random() - 0.5) * 2;  // [-1,1)
-        //consistent movement speed for all particles:
-        const mag = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
-        //normalize using mag to get unit vector (1), then scale by speed we set
-        this.vx = (this.vx / mag) * this.speed;
-        this.vy = (this.vy / mag) * this.speed;
+        this.vy = (Math.random() - 0.5) * 2;
     }
 
     update() {
@@ -62,12 +51,42 @@ class Particle {  //colored bursts
         ctx.globalAlpha = this.life;
         ctx.fillStyle = this.color;
         ctx.beginPath();
-        // on canvas, circle drawn at each particle position x,y 
-        // and 0 to 2PI radians
         ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
         ctx.fill();
-        //retrieve what we saved to do more
+        //restore original canvas state
         ctx.restore();
+    }
+}
+
+class MovingObstacle {
+    constructor(x, y, dx = 1, dy = 0, speed = 0.5) {
+        this.x = x;
+        this.y = y;
+        this.dx = dx; // direction x
+        this.dy = dy; // direction y
+        this.speed = speed;
+        this.counter = 0; // for timing movement
+    }
+
+    update(cols, rows) {
+        this.counter += this.speed;
+        if (this.counter >= 1) {
+            // Move to next position
+            this.x += this.dx;
+            this.y += this.dy;
+            
+            // Bounce off edges
+            if (this.x <= 0 || this.x >= cols - 1) {
+                this.dx *= -1;
+                this.x = Math.max(0, Math.min(cols - 1, this.x));
+            }
+            if (this.y <= 0 || this.y >= rows - 1) {
+                this.dy *= -1;
+                this.y = Math.max(0, Math.min(rows - 1, this.y));
+            }
+            
+            this.counter = 0;
+        }
     }
 }
 
@@ -92,15 +111,17 @@ class AStarVisualizer {
         this.isRunning = false;
         this.animationEnabled = true;
         this.animationSpeed = 50; // milliseconds between steps
+        
+        // Dynamic obstacles
+        this.movingObstacles = [];
+        this.dynamicObstaclesEnabled = false;
 
         this.initGrid();
         this.setupEventListeners();
-        // Start the animation loop
         this.animate();
     }
 
     initGrid() {
-        this.grid = [];
         for (let i = 0; i < this.cols; i++) {
             this.grid[i] = [];
             for (let j = 0; j < this.rows; j++) {
@@ -109,101 +130,79 @@ class AStarVisualizer {
         }
     }
 
-    setupEventListeners() { // mouse + button events on canvas
-        // click down on mouse
+    setupEventListeners() {
+        // Mouse events
         this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        // drag mouse
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        // finish a mouse drag and click up
         this.canvas.addEventListener('mouseup', () => this.isDrawingObstacles = false);
 
-        // make event listeners for buttons, connected by their html IDs
-        // javascript arrow functions () => {} bind the 'this' context lexically,
-        // inheriting from the scope of the class instance
+        // Button events
         document.getElementById('startBtn').addEventListener('click', () => this.startPathfinding());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearPath());
         document.getElementById('randomObstaclesBtn').addEventListener('click', () => this.generateRandomObstacles());
         document.getElementById('clearAllBtn').addEventListener('click', () => this.clearAll());
         document.getElementById('animateBtn').addEventListener('click', () => this.toggleAnimation());
+        document.getElementById('dynamicObstaclesBtn').addEventListener('click', () => this.toggleDynamicObstacles());
+        document.getElementById('addMovingObstaclesBtn').addEventListener('click', () => this.generateMovingObstacles());
     }
 
-    getMousePos(e) {  //get mouse event (e) (clicks, drags) grid coordinates
-        const rect = this.canvas.getBoundingClientRect();   //returns a DOMRect object based on the css bounding boxes
+    getMousePos(e) {
+        const rect = this.canvas.getBoundingClientRect();
         return {
-            // returns converted pixel -> grid coordinates
-            // e.clientX and e.clientY give the 
-            // horizontal (x) and vertical (y) position of the mouse pointer,
-            // in pixels, relative to the top-left corner of the
-            // browser’s visible area (the viewport) when the event occurred.
             x: Math.floor((e.clientX - rect.left) / this.gridSize),
             y: Math.floor((e.clientY - rect.top) / this.gridSize)
         };
     }
 
-    handleMouseDown(e) {  //manages user placing the start node, end node, obstacles
+    handleMouseDown(e) {
         if (this.isRunning) return;
 
         const pos = this.getMousePos(e);
-        // exit if position out of bounds
         if (pos.x < 0 || pos.x >= this.cols || pos.y < 0 || pos.y >= this.rows) return;
 
         const node = this.grid[pos.x][pos.y];
 
-        if (this.isPlacingStart) {  //start node not set
-            //reset any existing start/end nodes
+        if (this.isPlacingStart) {
             this.clearStartEnd();
-            //make that node the start
             node.isStart = true;
-            //update reference
             this.start = node;
-            //next user action will place the end node
             this.isPlacingStart = false;
-            //center green particle burst in middle of cell
-            this.addParticles(pos.x * this.gridSize + this.gridSize / 2, pos.y * this.gridSize + this.gridSize / 2, '#00ff00');
-        } else if (!this.start || (this.start && !this.end)) {  //start node set, end node not set
-            //check that it isnt on start 
+            this.addParticles(pos.x * this.gridSize + this.gridSize/2, pos.y * this.gridSize + this.gridSize/2, '#00ff00');
+        } else if (!this.start || (this.start && !this.end)) {
             if (!node.isStart) {
-                //make that node the end
                 node.isEnd = true;
-                //update reference
                 this.end = node;
-                //trigger red particle burst
-                this.addParticles(pos.x * this.gridSize + this.gridSize / 2, pos.y * this.gridSize + this.gridSize / 2, '#ff0000');
+                this.addParticles(pos.x * this.gridSize + this.gridSize/2, pos.y * this.gridSize + this.gridSize/2, '#ff0000');
             }
-        } else {                    //mousedown event triggers an obstacle placement
-            if (!node.isStart && !node.isEnd) {  //start and end nodes set
-                //allow for true/false status for obstacles
+        } else {
+            if (!node.isStart && !node.isEnd) {
                 node.isObstacle = !node.isObstacle;
-                //start drawing obstacles on drag
                 this.isDrawingObstacles = true;
             }
         }
     }
 
-    handleMouseMove(e) {  //draw obstacles on drag
-        //at least one needs to be true, and the function returns early.
+    handleMouseMove(e) {
         if (!this.isDrawingObstacles || this.isRunning) return;
 
-        //if we are here we are in drawing mode and not running algorithm
-        const pos = this.getMousePos(e);  //returns grid coordinates
+        const pos = this.getMousePos(e);
         if (pos.x < 0 || pos.x >= this.cols || pos.y < 0 || pos.y >= this.rows) return;
-
-        //pos holds grid coordinates from mouse move event
+        
         const node = this.grid[pos.x][pos.y];
-        //set obstacle if not start/end
         if (!node.isStart && !node.isEnd) {
             node.isObstacle = true;
         }
     }
 
-    clearStartEnd() {  //resets the grid state for start and end points
-        //remove the start and end status on the nodes
-        if (this.start) this.start.isStart = false;
-        if (this.end) this.end.isEnd = false;
-        //removes the references
-        this.start = null;
-        this.end = null;
-        //next user action will select a new start node
+    clearStartEnd() {
+        if (this.start) {
+            this.start.isStart = false;
+            this.start = null;
+        }
+        if (this.end) {
+            this.end.isEnd = false;
+            this.end = null;
+        }
         this.isPlacingStart = true;
     }
 
@@ -211,21 +210,19 @@ class AStarVisualizer {
         this.openSet = [];
         this.closedSet = [];
         this.path = [];
-        // zero out f, parent, and properties for all nodes
+        
         for (let i = 0; i < this.cols; i++) {
             for (let j = 0; j < this.rows; j++) {
                 const node = this.grid[i][j];
-                node.f = 0;
                 node.g = 0;
                 node.h = 0;
+                node.f = 0;
                 node.parent = null;
                 node.isPath = false;
                 node.isExplored = false;
                 node.isFrontier = false;
             }
         }
-        this.isRunning = false;
-        document.getElementById('startBtn').disabled = false;
     }
 
     clearAll() {
@@ -237,6 +234,7 @@ class AStarVisualizer {
             }
         }
         this.particles = [];
+        this.movingObstacles = [];
     }
 
     generateRandomObstacles() {
@@ -244,77 +242,72 @@ class AStarVisualizer {
         for (let i = 0; i < this.cols; i++) {
             for (let j = 0; j < this.rows; j++) {
                 const node = this.grid[i][j];
-                //each node has a 30% chance of becoming an obstacle
                 if (!node.isStart && !node.isEnd && Math.random() < 0.3) {
-                    //set the node's property to be an obstacle
                     node.isObstacle = true;
                 }
             }
         }
     }
 
-    toggleAnimation() { 
+    toggleAnimation() {
         this.animationEnabled = !this.animationEnabled;
-        //retrieves element with the ID 'animateBtn' from the DOM.
         const btn = document.getElementById('animateBtn');
-        //changes button text based on current state
         btn.textContent = this.animationEnabled ? 'Disable Animation' : 'Enable Animation';
     }
 
-    addParticles(x, y, color, count = 10) {  //add colored particles at x,y
+    addParticles(x, y, color, count = 10) {
         for (let i = 0; i < count; i++) {
-            //push() adds new particle to the end of the particles array
             this.particles.push(new Particle(x, y, color));
         }
     }
 
-    heuristic(a, b) { //distance formula for a*
+    // Manhattan distance only (perfect for 4-directional grid movement)
+    heuristic(a, b) {
         return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
     }
 
-    getNeighbors(node) {  //returns non-obstacle neighbors of a node
+    getNeighbors(node) {
         const neighbors = [];
         const x = node.x;
         const y = node.y;
 
-        // 4 possible directions (left, right, down, up)
+        // 4 cardinal directions only
         const directions = [
             { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
             { dx: 0, dy: -1 }, { dx: 0, dy: 1 }
         ];
-        // calculate neighboring cell positions
+
         directions.forEach(dir => {
             const newX = x + dir.dx;
             const newY = y + dir.dy;
 
             if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
-                //give neighbor a grid point
                 const neighbor = this.grid[newX][newY];
-                if (!neighbor.isObstacle) {
-                    //add non-obstacle neighbors to the end of the neighbors array
+                
+                // Check if it's a moving obstacle
+                const isMovingObstacle = this.movingObstacles.some(obs => 
+                    Math.floor(obs.x) === newX && Math.floor(obs.y) === newY
+                );
+                
+                if (!neighbor.isObstacle && !isMovingObstacle) {
                     neighbors.push(neighbor);
                 }
             }
         });
-        //we need to return valid neighbors for a* to pathfind correctly
+
         return neighbors;
     }
 
-    reconstructPath(current) {   //retrace steps from end to start using parent links
+    reconstructPath(current) {
         this.path = [];
         while (current) {
-            //going backwards and adding each node to the start of the array 
-            // will generate a path from start to end
             this.path.unshift(current);
             current = current.parent;
         }
 
-        // between start and end, set nodes as part of path
         this.path.forEach((node, index) => {
             if (!node.isStart && !node.isEnd) {
                 node.isPath = true;
-
-                // Visual: Add particles along the path with a 50ms linear delay scaled by index
                 setTimeout(() => {
                     this.addParticles(
                         node.x * this.gridSize + this.gridSize / 2,
@@ -327,7 +320,7 @@ class AStarVisualizer {
         });
     }
 
-    async startPathfinding() {  //main a* algorithm -- open set means nodes to be evaluated, closed set means nodes already evaluated
+    async startPathfinding() {
         if (!this.start || !this.end) {
             alert('Please place both start and end points');
             return;
@@ -355,7 +348,7 @@ class AStarVisualizer {
             }
 
             // Move current from open to closed set
-            this.openSet.splice(currentIndex, 1);  //remove 1 item at currentIndex
+            this.openSet.splice(currentIndex, 1);
             this.closedSet.push(current);
             current.isExplored = true;
 
@@ -368,11 +361,9 @@ class AStarVisualizer {
             );
 
             // Check if we reached the goal
-            if (current === this.end) {  //truthy if ref's to nodes in memory are the same
-                //return a path array from start to end
-                this.reconstructPath(current);  
+            if (current === this.end) {
+                this.reconstructPath(current);
                 this.isRunning = false;
-                //reenable start button
                 document.getElementById('startBtn').disabled = false;
                 return;
             }
@@ -380,18 +371,14 @@ class AStarVisualizer {
             // Check all neighbors
             const neighbors = this.getNeighbors(current);
 
-            //skip over neighbors already evaluated
             for (const neighbor of neighbors) {
                 if (this.closedSet.includes(neighbor)) continue;
 
-                // cost in a grid is always 1 between nodes
                 const tentativeG = current.g + 1;
 
-                //create the frontier nodes based on neighbors
                 if (!this.openSet.includes(neighbor)) {
                     this.openSet.push(neighbor);
                     neighbor.isFrontier = true;
-                    // Add frontier particles
                     this.addParticles(
                         neighbor.x * this.gridSize + this.gridSize / 2,
                         neighbor.y * this.gridSize + this.gridSize / 2,
@@ -416,10 +403,35 @@ class AStarVisualizer {
 
         // No path found
         alert('No path found!');
-        //stop running
         this.isRunning = false;
-        //reenable start button
         document.getElementById('startBtn').disabled = false;
+    }
+
+    // Dynamic obstacle methods
+    toggleDynamicObstacles() {
+        this.dynamicObstaclesEnabled = !this.dynamicObstaclesEnabled;
+        const btn = document.getElementById('dynamicObstaclesBtn');
+        btn.textContent = this.dynamicObstaclesEnabled ? 'Disable Dynamic Obstacles' : 'Enable Dynamic Obstacles';
+    }
+
+    generateMovingObstacles() {
+        this.movingObstacles = [];
+        const count = Math.floor(Math.random() * 3) + 3;
+        for (let i = 0; i < count; i++) {
+            const x = Math.floor(Math.random() * this.cols);
+            const y = Math.floor(Math.random() * this.rows);
+            const dx = Math.random() > 0.5 ? 1 : -1;
+            const dy = Math.random() > 0.5 ? 1 : -1;
+            this.movingObstacles.push(new MovingObstacle(x, y, dx, dy));
+        }
+    }
+
+    updateMovingObstacles() {
+        if (this.dynamicObstaclesEnabled) {
+            this.movingObstacles.forEach(obstacle => {
+                obstacle.update(this.cols, this.rows);
+            });
+        }
     }
 
     draw() {
@@ -443,7 +455,7 @@ class AStarVisualizer {
             this.ctx.stroke();
         }
 
-        // Draw nodes
+        // Draw nodes with enhanced visuals
         for (let i = 0; i < this.cols; i++) {
             for (let j = 0; j < this.rows; j++) {
                 const node = this.grid[i][j];
@@ -454,16 +466,28 @@ class AStarVisualizer {
                     this.ctx.fillStyle = '#333';
                     this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
                 } else if (node.isStart) {
+                    this.ctx.shadowColor = '#00ff00';
+                    this.ctx.shadowBlur = 10;
                     this.ctx.fillStyle = '#00ff00';
                     this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
+                    this.ctx.shadowBlur = 0;
                 } else if (node.isEnd) {
+                    this.ctx.shadowColor = '#ff0000';
+                    this.ctx.shadowBlur = 10;
                     this.ctx.fillStyle = '#ff0000';
                     this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
+                    this.ctx.shadowBlur = 0;
                 } else if (node.isPath) {
+                    this.ctx.shadowColor = '#ffff00';
+                    this.ctx.shadowBlur = 5;
                     this.ctx.fillStyle = '#ffff00';
                     this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
+                    this.ctx.shadowBlur = 0;
                 } else if (node.isExplored) {
-                    this.ctx.fillStyle = 'rgba(0, 255, 255, 0.3)';
+                    const gradient = this.ctx.createLinearGradient(x, y, x + this.gridSize, y + this.gridSize);
+                    gradient.addColorStop(0, 'rgba(0, 255, 255, 0.3)');
+                    gradient.addColorStop(1, 'rgba(0, 150, 150, 0.3)');
+                    this.ctx.fillStyle = gradient;
                     this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
                 } else if (node.isFrontier) {
                     this.ctx.fillStyle = 'rgba(255, 0, 255, 0.3)';
@@ -471,6 +495,19 @@ class AStarVisualizer {
                 }
             }
         }
+
+        // Draw moving obstacles
+        this.movingObstacles.forEach(obstacle => {
+            const x = obstacle.x * this.gridSize;
+            const y = obstacle.y * this.gridSize;
+            
+            this.ctx.fillStyle = '#ff6600';
+            this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
+            
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(x, y, this.gridSize, this.gridSize);
+        });
 
         // Draw particles
         this.particles = this.particles.filter(particle => {
@@ -481,6 +518,7 @@ class AStarVisualizer {
     }
 
     animate() {
+        this.updateMovingObstacles();
         this.draw();
         requestAnimationFrame(() => this.animate());
     }
@@ -488,6 +526,5 @@ class AStarVisualizer {
 
 // Initialize the visualizer when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    debugger;
     new AStarVisualizer();
 });
