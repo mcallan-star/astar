@@ -58,38 +58,6 @@ class Particle {  //colored bursts
     }
 }
 
-class MovingObstacle {
-    constructor(x, y, dx = 1, dy = 0, speed = 0.5) {
-        this.x = x;
-        this.y = y;
-        this.dx = dx; // direction x
-        this.dy = dy; // direction y
-        this.speed = speed;
-        this.counter = 0; // for timing movement
-    }
-
-    update(cols, rows) {
-        this.counter += this.speed;
-        if (this.counter >= 1) {
-            // Move to next position
-            this.x += this.dx;
-            this.y += this.dy;
-            
-            // Bounce off edges
-            if (this.x <= 0 || this.x >= cols - 1) {
-                this.dx *= -1;
-                this.x = Math.max(0, Math.min(cols - 1, this.x));
-            }
-            if (this.y <= 0 || this.y >= rows - 1) {
-                this.dy *= -1;
-                this.y = Math.max(0, Math.min(rows - 1, this.y));
-            }
-            
-            this.counter = 0;
-        }
-    }
-}
-
 class AStarVisualizer {
     constructor() {
         this.canvas = document.getElementById('canvas');
@@ -109,12 +77,9 @@ class AStarVisualizer {
         this.isPlacingStart = true;
         this.isDrawingObstacles = false;
         this.isRunning = false;
-        this.animationEnabled = true;
-        this.animationSpeed = 50; // milliseconds between steps
         
-        // Dynamic obstacles
-        this.movingObstacles = [];
-        this.dynamicObstaclesEnabled = false;
+        // Add back animation speed (but no toggle)
+        this.animationSpeed = 50; // milliseconds between steps (adjust this value)
 
         this.initGrid();
         this.setupEventListeners();
@@ -141,9 +106,6 @@ class AStarVisualizer {
         document.getElementById('clearBtn').addEventListener('click', () => this.clearPath());
         document.getElementById('randomObstaclesBtn').addEventListener('click', () => this.generateRandomObstacles());
         document.getElementById('clearAllBtn').addEventListener('click', () => this.clearAll());
-        document.getElementById('animateBtn').addEventListener('click', () => this.toggleAnimation());
-        document.getElementById('dynamicObstaclesBtn').addEventListener('click', () => this.toggleDynamicObstacles());
-        document.getElementById('addMovingObstaclesBtn').addEventListener('click', () => this.generateMovingObstacles());
     }
 
     getMousePos(e) {
@@ -234,7 +196,6 @@ class AStarVisualizer {
             }
         }
         this.particles = [];
-        this.movingObstacles = [];
     }
 
     generateRandomObstacles() {
@@ -247,12 +208,6 @@ class AStarVisualizer {
                 }
             }
         }
-    }
-
-    toggleAnimation() {
-        this.animationEnabled = !this.animationEnabled;
-        const btn = document.getElementById('animateBtn');
-        btn.textContent = this.animationEnabled ? 'Disable Animation' : 'Enable Animation';
     }
 
     addParticles(x, y, color, count = 10) {
@@ -284,12 +239,7 @@ class AStarVisualizer {
             if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
                 const neighbor = this.grid[newX][newY];
                 
-                // Check if it's a moving obstacle
-                const isMovingObstacle = this.movingObstacles.some(obs => 
-                    Math.floor(obs.x) === newX && Math.floor(obs.y) === newY
-                );
-                
-                if (!neighbor.isObstacle && !isMovingObstacle) {
+                if (!neighbor.isObstacle) {
                     neighbors.push(neighbor);
                 }
             }
@@ -395,43 +345,14 @@ class AStarVisualizer {
                 neighbor.f = neighbor.g + neighbor.h;
             }
 
-            // Animation delay
-            if (this.animationEnabled) {
-                await new Promise(resolve => setTimeout(resolve, this.animationSpeed));
-            }
+            // Add animation delay here (always active now)
+            await new Promise(resolve => setTimeout(resolve, this.animationSpeed));
         }
 
         // No path found
         alert('No path found!');
         this.isRunning = false;
         document.getElementById('startBtn').disabled = false;
-    }
-
-    // Dynamic obstacle methods
-    toggleDynamicObstacles() {
-        this.dynamicObstaclesEnabled = !this.dynamicObstaclesEnabled;
-        const btn = document.getElementById('dynamicObstaclesBtn');
-        btn.textContent = this.dynamicObstaclesEnabled ? 'Disable Dynamic Obstacles' : 'Enable Dynamic Obstacles';
-    }
-
-    generateMovingObstacles() {
-        this.movingObstacles = [];
-        const count = Math.floor(Math.random() * 3) + 3;
-        for (let i = 0; i < count; i++) {
-            const x = Math.floor(Math.random() * this.cols);
-            const y = Math.floor(Math.random() * this.rows);
-            const dx = Math.random() > 0.5 ? 1 : -1;
-            const dy = Math.random() > 0.5 ? 1 : -1;
-            this.movingObstacles.push(new MovingObstacle(x, y, dx, dy));
-        }
-    }
-
-    updateMovingObstacles() {
-        if (this.dynamicObstaclesEnabled) {
-            this.movingObstacles.forEach(obstacle => {
-                obstacle.update(this.cols, this.rows);
-            });
-        }
     }
 
     draw() {
@@ -496,19 +417,6 @@ class AStarVisualizer {
             }
         }
 
-        // Draw moving obstacles
-        this.movingObstacles.forEach(obstacle => {
-            const x = obstacle.x * this.gridSize;
-            const y = obstacle.y * this.gridSize;
-            
-            this.ctx.fillStyle = '#ff6600';
-            this.ctx.fillRect(x, y, this.gridSize, this.gridSize);
-            
-            this.ctx.strokeStyle = '#ff0000';
-            this.ctx.lineWidth = 2;
-            this.ctx.strokeRect(x, y, this.gridSize, this.gridSize);
-        });
-
         // Draw particles
         this.particles = this.particles.filter(particle => {
             particle.update(); 
@@ -518,7 +426,6 @@ class AStarVisualizer {
     }
 
     animate() {
-        this.updateMovingObstacles();
         this.draw();
         requestAnimationFrame(() => this.animate());
     }
